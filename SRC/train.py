@@ -1,89 +1,88 @@
-import pandas as pd
+import os
 import joblib
-from pathlib import Path
+import mlflow
+import mlflow.xgboost
+import pandas as pd
 
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
+from mlflow.tracking import MlflowClient
+
 from sklearn.model_selection import train_test_split
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
-    f1_score
+    f1_score,
+    roc_auc_score
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# ==========================================================
+# Configuration
+# ==========================================================
 
-DATA_DIR = BASE_DIR / "data"
+EXPERIMENT_NAME = "Telco-Customer-Churn-XGBoost"
+REGISTERED_MODEL_NAME = "CustomerChurnModel"
 
-ARTIFACTS_DIR = BASE_DIR / "artifacts"
+ARTIFACTS_DIR = "artifacts"
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
-ARTIFACTS_DIR.mkdir(exist_ok=True)
+mlflow.set_experiment(EXPERIMENT_NAME)
 
-df = pd.read_csv(DATA_DIR / "clean_churn.csv")
+client = MlflowClient()
 
-X = df.drop("Churn", axis=1)
-y = df["Churn"]
+# ==========================================================
+# Load Dataset
+# ==========================================================
+
+df = pd.read_csv("Telco-Customer-Churn.csv")
 
 # Remove customer ID
-df.drop("customerID", axis=1, inplace=True)
+if "customerID" in df.columns:
+    df.drop("customerID", axis=1, inplace=True)
 
-# Convert target column
-df["Churn"] = df["Churn"].map({
-    "Yes": 1,
-    "No": 0
-})
+# Fix TotalCharges column
+df["TotalCharges"] = df["TotalCharges"].replace(" ", pd.NA)
+df["TotalCharges"] = pd.to_numeric(
+    df["TotalCharges"],
+    errors="coerce"
+)
 
-# Create features and target
+df["TotalCharges"] = df["TotalCharges"].fillna(
+    df["TotalCharges"].median()
+)
+
+# ==========================================================
+# Encode Categorical Columns
+# ==========================================================
+
+label_encoders = {}
+
+for column in df.columns:
+    if df[column].dtype == "object":
+        encoder = LabelEncoder()
+        df[column] = encoder.fit_transform(df[column])
+        label_encoders[column] = encoder
+
+# Save encoders
+joblib.dump(
+    label_encoders,
+    os.path.join(
+        ARTIFACTS_DIR,
+        "label_encoders.pkl"
+    )
+)
+
+# ==========================================================
+# Features and Target
+# ==========================================================
+
 X = df.drop("Churn", axis=1)
 y = df["Churn"]
 
-categorical_columns = X.select_dtypes(
-    include=["object", "string"]
-).columns
-
-numerical_columns = X.select_dtypes(
-    exclude=["object", "string"]
-).columns
-
-numeric_pipeline = Pipeline(
-    steps=[
-        ("scaler", StandardScaler())
-    ]
-)
-
-categorical_pipeline = Pipeline(
-    steps=[
-        (
-            "encoder",
-            OneHotEncoder(
-                handle_unknown="ignore"
-            )
-        )
-    ]
-)
-
-preprocessor = ColumnTransformer(
-    transformers=[
-        (
-            "num",
-            numeric_pipeline,
-            numerical_columns
-        ),
-        (
-            "cat",
-            categorical_pipeline,
-            categorical_columns
-        )
-    ]
-)
+# ==========================================================
+# Train/Test Split
+# ==========================================================
 
 X_train, X_test, y_train, y_test = train_test_split(
     X,
@@ -93,78 +92,177 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-X_train = preprocessor.fit_transform(X_train)
-X_test = preprocessor.transform(X_test)
+# ==========================================================
+# Scaling
+# ==========================================================
+
+scaler = StandardScaler()
+
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
 
 joblib.dump(
-    preprocessor,
-    ARTIFACTS_DIR / "preprocessor.pkl"
+    scaler,
+    os.path.join(
+        ARTIFACTS_DIR,
+        "scaler.pkl"
+    )
 )
 
-models = {
-    "Logistic Regression": LogisticRegression(max_iter=1000),
+# ==========================================================
+# Train Multiple Models
+# ==========================================================
 
-    "Decision Tree": DecisionTreeClassifier(
-        random_state=42
-    ),
-
-    "Random Forest": RandomForestClassifier(
-        random_state=42
-    ),
-
-    "Gradient Boosting": GradientBoostingClassifier(
-        random_state=42
-    )
-}
+depths = [2, 4, 6, 8, 10]
 
 best_model = None
-best_score = 0
+best_f1 = 0
+best_depth = None
 
-for name, model in models.items():
+for depth in depths:
 
-    model.fit(X_train, y_train)
+    with mlflow.start_run(
+        run_name=f"XGBoost_Depth_{depth}"
+    ):
 
-    predictions = model.predict(X_test)
+        model = XGBClassifier(
+            n_estimators=200,
+            learning_rate=0.1,
+            max_depth=depth,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            eval_metric="logloss"
+        )
 
-    accuracy = accuracy_score(
-        y_test,
-        predictions
-    )
+        # Training
+        model.fit(
+            X_train,
+            y_train
+        )
 
-    precision = precision_score(
-        y_test,
-        predictions
-    )
+        # Prediction
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)[:, 1]
 
-    recall = recall_score(
-        y_test,
-        predictions
-    )
+        # Metrics
+        accuracy = accuracy_score(
+            y_test,
+            y_pred
+        )
 
-    f1 = f1_score(
-        y_test,
-        predictions
-    )
+        precision = precision_score(
+            y_test,
+            y_pred
+        )
 
-    print("\n")
-    print("="*50)
-    print(name)
-    print("="*50)
+        recall = recall_score(
+            y_test,
+            y_pred
+        )
 
-    print("Accuracy :", accuracy)
-    print("Precision:", precision)
-    print("Recall   :", recall)
-    print("F1 Score :", f1)
+        f1 = f1_score(
+            y_test,
+            y_pred
+        )
 
-    if f1 > best_score:
-        best_score = f1
-        best_model = model
+        roc_auc = roc_auc_score(
+            y_test,
+            y_prob
+        )
+
+        # Console Output
+        print("\n" + "=" * 50)
+        print(f"Depth      : {depth}")
+        print(f"Accuracy   : {accuracy:.4f}")
+        print(f"Precision  : {precision:.4f}")
+        print(f"Recall     : {recall:.4f}")
+        print(f"F1 Score   : {f1:.4f}")
+        print(f"ROC AUC    : {roc_auc:.4f}")
+
+        # Log Parameters
+        mlflow.log_params({
+            "model_type": "XGBoost",
+            "max_depth": depth,
+            "n_estimators": 200,
+            "learning_rate": 0.1,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8
+        })
+
+        # Log Metrics
+        mlflow.log_metrics({
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1,
+            "roc_auc": roc_auc
+        })
+
+        # Log Model
+        mlflow.xgboost.log_model(
+            xgb_model=model,
+            name="model"
+        )
+
+        # Track best model
+        if f1 > best_f1:
+            best_f1 = f1
+            best_model = model
+            best_depth = depth
+
+# ==========================================================
+# Save Best Model
+# ==========================================================
+
+best_model_path = os.path.join(
+    ARTIFACTS_DIR,
+    "model.pkl"
+)
 
 joblib.dump(
     best_model,
-    ARTIFACTS_DIR / "model.pkl"
+    best_model_path
 )
 
-print("\nBest model saved successfully!")
-print("Best F1 Score:", best_score)
+print("\n" + "=" * 60)
+print("BEST MODEL")
+print("=" * 60)
+print(f"Best Depth    : {best_depth}")
+print(f"Best F1 Score : {best_f1:.4f}")
 
+# ==========================================================
+# Register Best Model
+# ==========================================================
+
+with mlflow.start_run(
+    run_name="Best_Model_Registration"
+):
+
+    model_info = mlflow.xgboost.log_model(
+        xgb_model=best_model,
+        name="registered_model"
+    )
+
+    mlflow.log_artifact(best_model_path)
+    mlflow.log_artifact(
+        os.path.join(
+            ARTIFACTS_DIR,
+            "scaler.pkl"
+        )
+    )
+
+    result = mlflow.register_model(
+        model_uri=model_info.model_uri,
+        name=REGISTERED_MODEL_NAME
+    )
+
+    print(
+        f"\nRegistered Model Name: {REGISTERED_MODEL_NAME}"
+    )
+
+    print(
+        f"Registered Version: {result.version}"
+    )
+
+print("\nTraining Completed Successfully")

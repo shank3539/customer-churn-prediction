@@ -7,7 +7,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
-df = pd.read_csv("clean_churn.csv")
+df = pd.read_csv("../notebooks/Telco-Customer-Churn.csv")
 
 df.drop("customerID", axis=1, inplace=True)
 
@@ -88,7 +88,7 @@ print("Test :", X_test_processed.shape)
 
 joblib.dump(
     preprocessor,
-    "artifacts/preprocessor.pkl"
+    "../artifacts/preprocessor.pkl"
 )
 
 print("Preprocessor saved successfully!")
