@@ -8,12 +8,12 @@ from config import (
     BUCKET_NAME
 )
 
-LOCAL_DIR = "registered_model/mlmodel"
+LOCAL_DIR = "mlmodel"
 
 FILES = [
-    "registered_model/mlmodel/model.pkl",
-    "registered_model/mlmodel/scaler.pkl",
-    "registered_model/mlmodel/label_encoders.pkl"
+    "mlmodel/model.pkl",
+    "mlmodel/scaler.pkl",
+    "mlmodel/label_encoders.pkl"
 ]
 
 def download_model_if_needed():
