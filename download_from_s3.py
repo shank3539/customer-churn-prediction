@@ -11,19 +11,19 @@ from config import (
 LOCAL_DIR = "registered_model/mlmodel"
 
 FILES = [
-    r"registered_model\mlmodel\model.pkl",
-    r"registered_model\mlmodel\scaler.pkl",
-    r"registered_model\mlmodel\label_encoders.pkl"
+    "registered_model/mlmodel/model.pkl",
+    "registered_model/mlmodel/scaler.pkl",
+    "registered_model/mlmodel/label_encoders.pkl"
 ]
 
 def download_model_if_needed():
 
-    if os.path.exists(
-        os.path.join(
-            LOCAL_DIR,
-            "model.pkl"
-        )
-    ):
+    model_path = os.path.join(
+        LOCAL_DIR,
+        "model.pkl"
+    )
+
+    if os.path.exists(model_path):
         print("Model already exists locally.")
         return
 
@@ -48,12 +48,20 @@ def download_model_if_needed():
             os.path.basename(file)
         )
 
-        print(f"Downloading {file}")
+        try:
+            print(f"Downloading {file}")
 
-        s3.download_file(
-            BUCKET_NAME,
-            file,
-            local_path
-        )
+            s3.download_file(
+                BUCKET_NAME,
+                file,
+                local_path
+            )
+
+            print(f"Downloaded {file}")
+
+        except Exception as e:
+            print(f"Failed downloading {file}")
+            print(e)
+            raise
 
     print("Artifacts downloaded successfully.")
